@@ -16,35 +16,51 @@ BANK_CARD = "2200701927460763"
 STATS_FILE = "user_stats.json"
 BLOCKS_FILE = "user_blocks.json"
 
-# ЗАГРУЖАЕМ ДАННЫЕ ИЗ ФАЙЛОВ С ИСПРАВЛЕНИЕМ СТАРЫХ ДАННЫХ
+# УБЕДИМСЯ ЧТО ФАЙЛЫ СУЩЕСТВУЮТ
+def ensure_files_exist():
+    """Создает файлы если они не существуют"""
+    if not os.path.exists(STATS_FILE):
+        with open(STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump({}, f, ensure_ascii=False, indent=2)
+        print(f"📁 Создан файл {STATS_FILE}")
+    
+    if not os.path.exists(BLOCKS_FILE):
+        with open(BLOCKS_FILE, 'w', encoding='utf-8') as f:
+            json.dump({}, f, ensure_ascii=False, indent=2)
+        print(f"📁 Создан файл {BLOCKS_FILE}")
+
+# ВЫЗЫВАЕМ ПРИ СТАРТЕ
+ensure_files_exist()
+
+# УЛУЧШЕННАЯ ФУНКЦИЯ ЗАГРУЗКИ ДАННЫХ
 def load_data(filename, default={}):
+    """Загружает данные из файла"""
     try:
         if os.path.exists(filename):
             with open(filename, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # ИСПРАВЛЯЕМ СТАРЫЕ ДАННЫЕ ЕСЛИ ОНИ НЕПРАВИЛЬНОГО ФОРМАТА
-                if filename == BLOCKS_FILE:
-                    corrected_data = {}
-                    for key, value in data.items():
-                        if isinstance(value, dict):
-                            corrected_data[key] = value
-                        else:
-                            # ЕСЛИ ЗНАЧЕНИЕ НЕ DICT, СОЗДАЕМ ПРАВИЛЬНУЮ СТРУКТУРУ
-                            corrected_data[key] = {'type': 'permanent'}
-                    return corrected_data
+                print(f"📥 Загружено из {filename}: {len(data)} записей")
                 return data
+        else:
+            print(f"⚠️ Файл {filename} не существует")
+            return default
     except Exception as e:
-        print(f"Ошибка загрузки {filename}: {e}")
-    return default
+        print(f"❌ Ошибка загрузки {filename}: {e}")
+        return default
 
+# УЛУЧШЕННАЯ ФУНКЦИЯ СОХРАНЕНИЯ
 def save_data(data, filename):
+    """Сохраняет данные в файл"""
     try:
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"💾 Сохранено в {filename}: {len(data)} записей")
+        return True
     except Exception as e:
-        print(f"Ошибка сохранения {filename}: {e}")
+        print(f"❌ Ошибка сохранения {filename}: {e}")
+        return False
 
-# ЗАГРУУЖАЕМ ДАННЫЕ ПРИ СТАРТЕ
+# ЗАГРУЖАЕМ ДАННЫЕ ПРИ СТАРТЕ
 user_stats = load_data(STATS_FILE)
 user_blocks = load_data(BLOCKS_FILE)
 pending_payments = {}
@@ -106,9 +122,14 @@ PRIZES = {
 }
 
 def calculate_bonus(user_id):
+    """Рассчитывает бонус на основе актуальных данных"""
     user_id_str = str(user_id)
-    spins = user_stats.get(user_id_str, 0)
+    
+    # ПЕРЕЗАГРУЖАЕМ СВЕЖИЕ ДАННЫЕ ИЗ ФАЙЛА
+    fresh_stats = load_data(STATS_FILE)
+    spins = fresh_stats.get(user_id_str, 0)
     bonus = min(spins * 2, 20)  # +2% за каждую крутку, максимум 20%
+    
     print(f"🎁 Бонус для {user_id}: {spins} круток = +{bonus}%")
     return bonus
 
@@ -116,31 +137,71 @@ def is_user_blocked(user_id):
     user_id_str = str(user_id)
     if user_id_str in user_blocks:
         block_data = user_blocks[user_id_str]
-        # ПРОВЕРЯЕМ ЧТО BLOCK_DATA - СЛОВАРЬ А НЕ ЧИСЛО
         if isinstance(block_data, dict):
             if block_data.get('type') == 'permanent':
                 return True
             elif block_data.get('type') == 'temporary' and time.time() < block_data.get('until', 0):
                 return True
         else:
-            # ЕСЛИ ЭТО ЧИСЛО (СТАРЫЙ ФОРМАТ), УДАЛЯЕМ И ВОЗВРАЩАЕМ False
             del user_blocks[user_id_str]
             save_data(user_blocks, BLOCKS_FILE)
     return False
 
 def update_user_stats(user_id):
-    """ОБНОВЛЯЕМ СТАТИСТИКУ И СОХРАНЯЕМ В ФАЙЛ - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    """ОБНОВЛЯЕМ СТАТИСТИКУ И СОХРАНЯЕМ В ФАЙЛ"""
     user_id_str = str(user_id)
-    current_spins = user_stats.get(user_id_str, 0)
-    user_stats[user_id_str] = current_spins + 1
-    save_data(user_stats, STATS_FILE)
-    print(f"📊 Обновлена статистика для {user_id}: было {current_spins}, стало {user_stats[user_id_str]}")
+    
+    # ПЕРЕЗАГРУЖАЕМ СВЕЖИЕ ДАННЫЕ
+    fresh_stats = load_data(STATS_FILE)
+    current_spins = fresh_stats.get(user_id_str, 0)
+    
+    # ОБНОВЛЯЕМ ДАННЫЕ
+    fresh_stats[user_id_str] = current_spins + 1
+    
+    # СОХРАНЯЕМ В ФАЙЛ
+    if save_data(fresh_stats, STATS_FILE):
+        # ОБНОВЛЯЕМ ГЛОБАЛЬНУЮ ПЕРЕМЕННУЮ
+        global user_stats
+        user_stats = fresh_stats
+        print(f"📊 Обновлена статистика для {user_id}: было {current_spins}, стало {fresh_stats[user_id_str]} круток")
+        return True
+    else:
+        print(f"❌ Ошибка сохранения статистики для {user_id}")
+        return False
+
+# КОМАНДА ДЛЯ ПРОВЕРКИ СТАТИСТИКИ
+@bot.message_handler(commands=['mystats'])
+def check_my_stats(message):
+    """Показывает текущую статистику пользователя"""
+    user_id = message.from_user.id
+    user_id_str = str(user_id)
+    
+    # ЗАГРУЖАЕМ СВЕЖИЕ ДАННЫЕ ИЗ ФАЙЛА
+    fresh_stats = load_data(STATS_FILE)
+    
+    spins = fresh_stats.get(user_id_str, 0)
+    bonus = calculate_bonus(user_id)
+    
+    bot.send_message(
+        message.chat.id,
+        f"🔍 *ДЕБАГ СТАТИСТИКА:*\n"
+        f"👤 ID: `{user_id}`\n"
+        f"🎰 Круток: {spins}\n"
+        f"✨ Бонус: +{bonus}%\n"
+        f"💾 В памяти: {user_stats.get(user_id_str, 0)}\n"
+        f"📁 В файле: {fresh_stats.get(user_id_str, 0)}",
+        parse_mode='Markdown'
+    )
 
 @bot.message_handler(commands=['start'])
 def start(message):
     if is_user_blocked(message.from_user.id):
         bot.send_message(message.chat.id, "❌ ТЫ ЗАБЛОКИРОВАН! 🚫")
         return
+    
+    # ПЕРЕЗАГРУЖАЕМ СТАТИСТИКУ ПРИ КАЖДОМ СТАРТЕ
+    global user_stats
+    user_stats = load_data(STATS_FILE)
     
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn1 = types.KeyboardButton('🎰 КРУТИТЬ РУЛЕТКУ')
@@ -151,6 +212,8 @@ def start(message):
     user_id = message.from_user.id
     spins = user_stats.get(str(user_id), 0)
     bonus = calculate_bonus(user_id)
+    
+    print(f"🚀 Старт для {user_id}: {spins} круток, +{bonus}% бонус")
     
     bot.send_message(message.chat.id,
                     f"""🎰 *РУЛЕТКА УДОВОЛЬСТВИЙ* 🎰
@@ -186,6 +249,10 @@ def show_prices(message):
         bot.send_message(message.chat.id, "❌ ТЫ ЗАБЛОКИРОВАН! 🚫")
         return
     
+    # ПЕРЕЗАГРУЖАЕМ СТАТИСТИКУ ПЕРЕД ПОКАЗОМ ЦЕН
+    global user_stats
+    user_stats = load_data(STATS_FILE)
+    
     markup = types.InlineKeyboardMarkup()
     btn1 = types.InlineKeyboardButton('🟢 100₽', callback_data='pay_100')
     btn2 = types.InlineKeyboardButton('🟡 500₽', callback_data='pay_500') 
@@ -195,6 +262,8 @@ def show_prices(message):
     user_id = message.from_user.id
     spins = user_stats.get(str(user_id), 0)
     bonus = calculate_bonus(user_id)
+    
+    print(f"💰 Показ цен для {user_id}: {spins} круток, +{bonus}% бонус")
     
     bot.send_message(message.chat.id,
                    f"""💎 *ВЫБЕРИ СТАВКУ:*
@@ -262,12 +331,10 @@ def handle_screenshot(message):
     admin_markup.add(btn_confirm, btn_reject)
     admin_markup.add(btn_block_week, btn_block_forever)
     
-    # ПЕРЕСЫЛАЕМ СКРИН АДМИНУ С КНОПКАМИ - ПРЯМАЯ ПЕРЕСЫЛКА БЕЗ СОХРАНЕНИЯ
+    # ПЕРЕСЫЛАЕМ СКРИН АДМИНУ С КНОПКАМИ
     try:
-        # ПЕРЕСЫЛАЕМ ФОТО НАПРЯМУЮ АДМИНУ
         bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
         
-        # ОТПРАВЛЯЕМ КНОПКИ ОТДЕЛЬНЫМ СООБЩЕНИЕМ
         bot.send_message(
             ADMIN_ID,
             f"🔔 **НОВАЯ ОПЛАТА!**\n"
@@ -282,7 +349,6 @@ def handle_screenshot(message):
         
     except Exception as e:
         print(f"ОШИБКА ПЕРЕСЫЛКИ СКРИНА АДМИНУ: {e}")
-        # ЕСЛИ ПЕРЕСЫЛКА НЕ СРАБОТАЛА, ПРОБУЕМ ОТПРАВИТЬ КАК ФОТО
         try:
             bot.send_photo(
                 ADMIN_ID, 
@@ -300,7 +366,6 @@ def handle_screenshot(message):
             )
         except Exception as e2:
             print(f"ОШИБКА ОТПРАВКИ ФОТО АДМИНУ: {e2}")
-            # ЕСЛИ ВСЁ ПЛОХО, ШЛЁМ ТОЛЬКО ТЕКСТ
             bot.send_message(
                 ADMIN_ID,
                 f"🔔 **НОВАЯ ОПЛАТА!**\n"
@@ -313,7 +378,6 @@ def handle_screenshot(message):
                 reply_markup=admin_markup
             )
     
-    # УВЕДОМЛЯЕМ ПОЛЬЗОВАТЕЛЯ
     bot.send_message(
         message.chat.id, 
         "✅ **СКРИНШОТ ОТПРАВЛЕН АДМИНУ!**\n\n"
@@ -322,7 +386,7 @@ def handle_screenshot(message):
         parse_mode='Markdown'
     )
 
-# КНОПКИ ДЛЯ АДМИНА - ИСПРАВЛЕННАЯ ВЕРСИЯ БЕЗ KeyError
+# КНОПКИ ДЛЯ АДМИНА
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
 def handle_admin_actions(call):
     try:
@@ -337,7 +401,6 @@ def handle_admin_actions(call):
         if action == 'confirm':
             price = pending_payments.get(user_id)
             if price:
-                # УДАЛЯЕМ ИЗ PENDING ПЕРЕД КРУТКОЙ ЧТОБЫ ИЗБЕЖАТЬ ПОВТОРНОЙ АКТИВАЦИИ
                 del pending_payments[user_id]
                 spin_roulette_after_payment(user_id, price, user_id)
                 bot.answer_callback_query(call.id, f"✅ Оплата подтверждена!")
@@ -380,7 +443,9 @@ def spin_roulette_after_payment(user_id, price, chat_id):
     # ОБНОВЛЯЕМ СТАТИСТИКУ ПЕРЕД КРУТКОЙ
     update_user_stats(user_id)
     
-    spins = user_stats.get(str(user_id), 0)
+    # ПЕРЕЗАГРУЖАЕМ СВЕЖИЕ ДАННЫЕ ДЛЯ ОТОБРАЖЕНИЯ
+    fresh_stats = load_data(STATS_FILE)
+    spins = fresh_stats.get(str(user_id), 0)
     bonus = calculate_bonus(user_id)
     
     prize_names = [p["name"] for p in prizes]
@@ -393,7 +458,6 @@ def spin_roulette_after_payment(user_id, price, chat_id):
     
     prize = random.choices(prize_names, weights=weights)[0]
     
-    # ЛОГИРУЕМ ДЛЯ ОТЛАДКИ
     print(f"🎰 Крутка для {user_id}: ставка {price}₽, круток {spins}, бонус +{bonus}%, выиграл: {prize}")
     
     bot.send_message(chat_id, "🎰 *Колесо запущено...*", parse_mode='Markdown')
